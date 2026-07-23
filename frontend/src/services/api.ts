@@ -35,7 +35,8 @@ async function apiFetch<T>(
     ...(options.headers as Record<string, string>),
   };
 
-  if (token) {
+  // Não envia token nas rotas de autenticação
+  if (token && !path.includes("/auth/login") && !path.includes("/auth/register")) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
@@ -46,8 +47,9 @@ async function apiFetch<T>(
 
   if (response.status === 401) {
     clearToken();
-    if (path.includes("/auth/login")) {
-      throw new Error("E-mail ou senha incorretos.");
+    if (path.includes("/auth/login") || path.includes("/auth/register")) {
+      const errData = await response.json().catch(() => ({ detail: "E-mail ou senha incorretos." }));
+      throw new Error(errData.detail || "E-mail ou senha incorretos.");
     }
     if (typeof window !== "undefined" && window.location.pathname !== "/login") {
       window.location.href = "/login";
@@ -82,6 +84,7 @@ export const auth = {
   },
 
   async login(email: string, password: string) {
+    clearToken();
     const data = await apiFetch<{ access_token: string }>(
       "/api/v1/auth/login",
       {
