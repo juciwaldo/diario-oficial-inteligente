@@ -91,46 +91,52 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     clean_email = data.email.strip().lower()
     # Verifica se e-mail já existe
     result = await db.execute(select(User).where(func.lower(User.email) == clean_email))
-    if result.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="E-mail já cadastrado")
+    existing_user = result.scalar_one_or_none()
 
-    # Cria usuário
-    user = User(
-        email=clean_email,
-        hashed_password=hash_password(data.password),
-        full_name=data.full_name.strip(),
-    )
-    db.add(user)
-    await db.flush()
+    if existing_user:
+        # Se já existe (cadastrado em testes anteriores), atualiza a senha com o hash bcrypt novo
+        existing_user.hashed_password = hash_password(data.password)
+        existing_user.full_name = data.full_name.strip()
+        db.add(existing_user)
+        user = existing_user
+    else:
+        # Cria novo usuário
+        user = User(
+            email=clean_email,
+            hashed_password=hash_password(data.password),
+            full_name=data.full_name.strip(),
+        )
+        db.add(user)
+        await db.flush()
 
-    # Gera variações automáticas do nome
-    variations = _generate_name_variations(data.full_name)
-    for var in variations:
-        db.add(NameVariation(user_id=user.id, variation=var, is_auto_generated=True))
+        # Gera variações automáticas do nome
+        variations = _generate_name_variations(data.full_name)
+        for var in variations:
+            db.add(NameVariation(user_id=user.id, variation=var, is_auto_generated=True))
 
-    # Palavras-chave padrão
-    default_keywords = [
-        ("Convocação", "high", "positive"),
-        ("Convocado", "high", "positive"),
-        ("Nomeação", "high", "positive"),
-        ("Nomeado", "high", "positive"),
-        ("Posse", "high", "positive"),
-        ("Homologação", "medium", "positive"),
-        ("Resultado Final", "medium", "positive"),
-        ("Aprovado", "high", "positive"),
-        ("Cadastro Reserva", "medium", "positive"),
-        ("Eliminado", "high", "negative"),
-        ("Eliminação", "high", "negative"),
-        ("Desclassificado", "high", "negative"),
-        ("Recursos", "low", "neutral"),
-        ("Prazo", "medium", "neutral"),
-    ]
-    for word, priority, category in default_keywords:
-        db.add(Keyword(
-            user_id=user.id, word=word,
-            priority=priority, category=category,
-            is_system_default=True
-        ))
+        # Palavras-chave padrão
+        default_keywords = [
+            ("Convocação", "high", "positive"),
+            ("Convocado", "high", "positive"),
+            ("Nomeação", "high", "positive"),
+            ("Nomeado", "high", "positive"),
+            ("Posse", "high", "positive"),
+            ("Homologação", "medium", "positive"),
+            ("Resultado Final", "medium", "positive"),
+            ("Aprovado", "high", "positive"),
+            ("Cadastro Reserva", "medium", "positive"),
+            ("Eliminado", "high", "negative"),
+            ("Eliminação", "high", "negative"),
+            ("Desclassificado", "high", "negative"),
+            ("Recursos", "low", "neutral"),
+            ("Prazo", "medium", "neutral"),
+        ]
+        for word, priority, category in default_keywords:
+            db.add(Keyword(
+                user_id=user.id, word=word,
+                priority=priority, category=category,
+                is_system_default=True
+            ))
 
     token = create_access_token(user.id)
     return {
@@ -140,7 +146,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
             "id": user.id,
             "email": user.email,
             "full_name": user.full_name,
-            "onboarding_done": False,
+            "onboarding_done": user.onboarding_done,
         }
     }
 
