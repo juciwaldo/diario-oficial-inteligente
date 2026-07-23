@@ -274,14 +274,22 @@ export type ApiMatch = {
 };
 
 export const search = {
-  async run(journals: string[] = ["DOU", "DOBA"], targetDate?: string, customTerm?: string) {
-    return apiFetch<{ message: string; journals: string[]; date: string; total_matches?: number; matches?: any[] }>(
+  async run(
+    journals: string[] = ["DOU", "DOBA"],
+    targetDate?: string,
+    customTerm?: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
+    return apiFetch<{ message: string; journals: string[]; date?: string; start_date?: string; end_date?: string; total_matches?: number; matches?: any[] }>(
       "/api/v1/search/run",
       {
         method: "POST",
         body: JSON.stringify({
           journals,
           target_date: targetDate || null,
+          start_date: startDate || null,
+          end_date: endDate || null,
           custom_term: customTerm || null,
         }),
       },

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { format } from "date-fns";
+import { format, subDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
   AlertCircle,
@@ -93,8 +93,24 @@ export function SearchDialog({ open, onOpenChange }: Props) {
           <ProgressStep
             selectedCodes={Object.keys(selected).filter((k) => selected[k])}
             targetDate={
-              periodo === "custom" && dateFrom
+              periodo === "hoje"
+                ? format(new Date(), "yyyy-MM-dd")
+                : undefined
+            }
+            startDate={
+              periodo === "7d"
+                ? format(subDays(new Date(), 7), "yyyy-MM-dd")
+                : periodo === "30d"
+                ? format(subDays(new Date(), 30), "yyyy-MM-dd")
+                : periodo === "custom" && dateFrom
                 ? format(dateFrom, "yyyy-MM-dd")
+                : undefined
+            }
+            endDate={
+              periodo === "7d" || periodo === "30d"
+                ? format(new Date(), "yyyy-MM-dd")
+                : periodo === "custom" && (dateTo || dateFrom)
+                ? format(dateTo || dateFrom!, "yyyy-MM-dd")
                 : undefined
             }
             customTerm={customTerm}
@@ -350,12 +366,16 @@ function DateField({
 function ProgressStep({
   selectedCodes,
   targetDate,
+  startDate,
+  endDate,
   customTerm,
   onCancel,
   onDone,
 }: {
   selectedCodes: string[];
   targetDate?: string;
+  startDate?: string;
+  endDate?: string;
   customTerm?: string;
   onCancel: () => void;
   onDone: (res: any) => void;
@@ -374,7 +394,13 @@ function ProgressStep({
     let active = true;
     (async () => {
       try {
-        const res = await searchApi.run(selectedCodes, targetDate, customTerm);
+        const res = await searchApi.run(
+          selectedCodes,
+          targetDate,
+          customTerm,
+          startDate,
+          endDate,
+        );
         if (active) {
           onDone(res);
         }

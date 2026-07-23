@@ -79,7 +79,9 @@ class KeywordRequest(BaseModel):
 
 class SearchRequest(BaseModel):
     journals: List[str] = ["DOU", "DOBA"]
-    target_date: Optional[str] = None  # "YYYY-MM-DD" ou None para hoje
+    target_date: Optional[str] = None  # "YYYY-MM-DD" para dia único
+    start_date: Optional[str] = None   # "YYYY-MM-DD" início do período
+    end_date: Optional[str] = None     # "YYYY-MM-DD" fim do período
     custom_term: Optional[str] = None
 
 
@@ -504,8 +506,21 @@ async def run_search(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Inicia pesquisa manual e retorna os resultados reais encontrados."""
-    target_date = date.fromisoformat(data.target_date) if data.target_date else date.today()
+    """Inicia pesquisa manual por data única ou intervalo de datas (start_date até end_date)."""
+    if data.start_date and data.end_date:
+        s_date = date.fromisoformat(data.start_date)
+        e_date = date.fromisoformat(data.end_date)
+        return await _execute_search_range(
+            user_id=current_user.id,
+            journals=data.journals,
+            start_date=s_date,
+            end_date=e_date,
+            triggered_by="manual",
+            custom_term=data.custom_term,
+        )
+
+    t_date_str = data.target_date or data.start_date
+    target_date = date.fromisoformat(t_date_str) if t_date_str else date.today()
 
     res = await _execute_search(
         user_id=current_user.id,
@@ -921,6 +936,69 @@ async def _execute_search(
                 "matches": [],
                 "duration_seconds": 0,
             }
+
+
+async def _execute_search_range(
+    user_id: str,
+    journals: list[str],
+    start_date: date,
+    end_date: date,
+    triggered_by: str = "manual",
+    custom_term: str | None = None,
+):
+    """
+    Executa a pesquisa em um intervalo de datas [start_date, end_date].
+    Itera pelas edições e consolida os resultados.
+    """
+    from datetime import timedelta
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    # Limita intervalo a 365 dias
+    max_days = 365
+    total_days = (end_date - start_date).days + 1
+    if total_days > max_days:
+        start_date = end_date - timedelta(days=max_days - 1)
+
+    cur = start_date
+    date_list = []
+    while cur <= end_date:
+        date_list.append(cur)
+        cur += timedelta(days=1)
+
+    all_matches_accumulated = []
+    start_time = time.time()
+
+    # Processa datas em lotes de até 5
+    batch_size = 5
+    for i in range(0, len(date_list), batch_size):
+        batch_dates = date_list[i:i+batch_size]
+        tasks = [
+            _execute_search(
+                user_id=user_id,
+                journals=journals,
+                target_date=d,
+                triggered_by=triggered_by,
+                custom_term=custom_term,
+            )
+            for d in batch_dates
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for res in results:
+            if isinstance(res, dict) and res.get("total_matches", 0) > 0:
+                all_matches_accumulated.extend(res.get("matches", []))
+
+    duration = time.time() - start_time
+    return {
+        "message": f"Pesquisa concluída para o período {start_date.strftime('%d/%m/%Y')} até {end_date.strftime('%d/%m/%Y')}",
+        "journals": journals,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "total_matches": len(all_matches_accumulated),
+        "matches": all_matches_accumulated,
+        "duration_seconds": round(duration, 2),
+    }
 
 
 async def _send_telegram_alert(user: User, match: dict, journal: str, target_date: date):
