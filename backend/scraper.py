@@ -195,154 +195,91 @@ class DOUScraper:
 
 class DOBAScraper:
     """
-    Acessa o DOBA preferencialmente em HTML.
-    Fallback para PDF se HTML não estiver disponível.
+    Acessa o DOBA (Diário Oficial do Estado da Bahia) via API HTML de edições e matérias.
+    Fonte oficial: dool.egba.ba.gov.br
     """
 
-    BASE_URL = "https://www.egba.ba.gov.br"
-    REVISTA_URL = "https://www.egba.ba.gov.br/revista"
+    BASE_URL = "https://dool.egba.ba.gov.br"
 
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (compatible; DiarioInteligente/1.0)",
-        "Accept": "text/html,application/xhtml+xml,application/pdf",
-        "Accept-Language": "pt-BR,pt;q=0.9",
+        "Accept": "application/json, text/html, */*",
     }
 
     async def fetch(self, target_date: date = None) -> DiarioContent | None:
-        """
-        Tenta HTML primeiro.
-        Se falhar, tenta PDF.
-        """
+        """Busca a edição do DOBA na data especificada e extrai todas as matérias em HTML."""
         if target_date is None:
             target_date = date.today()
 
-        logger.info(f"DOBA: iniciando busca para {target_date}")
-
-        # TENTATIVA 1: HTML
-        content = await self._try_html(target_date)
-        if content:
-            logger.info(f"DOBA: sucesso via HTML ({content.total_chars:,} chars)")
-            return content
-
-        # TENTATIVA 2: PDF fallback
-        logger.warning("DOBA: HTML indisponível, tentando PDF...")
-        content = await self._try_pdf(target_date)
-        if content:
-            logger.info(f"DOBA: sucesso via PDF ({content.total_chars:,} chars)")
-            return content
-
-        logger.error(f"DOBA: sem conteúdo disponível para {target_date}")
-        return None
-
-    async def _try_html(self, target_date: date) -> DiarioContent | None:
-        """Tenta buscar o DOBA em HTML."""
-        # Formatos de URL comuns do portal DOBA
-        date_formats = [
-            target_date.strftime("%Y%m%d"),    # 20260722
-            target_date.strftime("%d/%m/%Y"),  # 22/07/2026
-            target_date.strftime("%Y-%m-%d"),  # 2026-07-22
-        ]
-
-        url_candidates = [
-            f"{self.REVISTA_URL}/{date_formats[0]}",
-            f"{self.BASE_URL}/diario/{date_formats[0]}",
-            f"{self.REVISTA_URL}?data={date_formats[2]}",
-        ]
-
-        async with httpx.AsyncClient(headers=self.HEADERS, timeout=20) as client:
-            for url in url_candidates:
-                try:
-                    response = await client.get(url, follow_redirects=True)
-
-                    # Verifica se retornou HTML real (não PDF, não redirect para 404)
-                    content_type = response.headers.get("content-type", "")
-                    if response.status_code == 200 and "text/html" in content_type:
-                        pages = self._parse_html(response.text)
-                        if pages:
-                            total = sum(len(p.text) for p in pages)
-                            return DiarioContent(
-                                journal="DOBA",
-                                edition_date=target_date,
-                                method=ExtractionMethod.HTML,
-                                pages=pages,
-                                total_chars=total,
-                                source_url=url,
-                            )
-
-                except Exception as e:
-                    logger.debug(f"DOBA HTML {url}: {e}")
-                    continue
-
-        return None
-
-    async def _try_pdf(self, target_date: date) -> DiarioContent | None:
-        """Fallback: baixa e extrai o PDF do DOBA."""
-        pdf_url = await self._find_pdf_url(target_date)
-        if not pdf_url:
-            return None
+        date_str = target_date.strftime("%Y-%m-%d")
+        logger.info(f"DOBA: buscando edicao para {date_str}")
 
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.get(pdf_url)
-                if response.status_code != 200:
+            async with httpx.AsyncClient(verify=False, timeout=30.0, headers=self.HEADERS) as client:
+                api_url = f"{self.BASE_URL}/apifront/portal/edicoes/edicoes_from_data/{date_str}"
+                res = await client.get(api_url)
+                if res.status_code != 200:
+                    logger.warning(f"DOBA: HTTP {res.status_code} na API edicoes")
                     return None
 
-                pdf_bytes = response.content
-                pages = await self._extract_pdf_text(pdf_bytes)
+                data = res.json()
+                if data.get("erro") or not data.get("itens"):
+                    logger.warning(f"DOBA: nenhuma edicao encontrada para {date_str}")
+                    return None
+
+                edicao = data["itens"][0]
+                edicao_id = edicao["id"]
+
+                # Busca arquivo HTML com a lista de materias
+                html_url = f"{self.BASE_URL}/html/{edicao_id}.html"
+                res_html = await client.get(html_url)
+                if res_html.status_code != 200:
+                    logger.warning(f"DOBA: falha ao baixar {html_url}")
+                    return None
+
+                soup = BeautifulSoup(res_html.text, "html.parser")
+                materias = [a.get("identificador") for a in soup.find_all("a", attrs={"identificador": True}) if a.get("identificador")]
+
+                if not materias:
+                    logger.warning(f"DOBA edicao {edicao_id}: nenhuma materia cadastrada")
+                    return None
+
+                # Baixa materias em paralelo em lotes
+                pages = []
+                batch_size = 30
+                for i in range(0, len(materias), batch_size):
+                    batch = materias[i:i+batch_size]
+                    tasks = [client.get(f"{self.BASE_URL}/apifront/portal/edicoes/publicacoes_ver_conteudo/{m_id}") for m_id in batch]
+                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    for m_id, r in zip(batch, responses):
+                        if isinstance(r, httpx.Response) and r.status_code == 200:
+                            m_soup = BeautifulSoup(r.text, "html.parser")
+                            text = m_soup.get_text(separator=" ", strip=True)
+                            if len(text) > 30:
+                                pages.append(PageContent(
+                                    page_number=len(pages) + 1,
+                                    text=text,
+                                    section=f"Materia {m_id}",
+                                ))
 
                 if not pages:
                     return None
 
-                # Detecta método usado (nativo ou OCR)
-                method = ExtractionMethod.PDF_NATIVE
-                avg_text = sum(len(p.text) for p in pages) / max(len(pages), 1)
-                if avg_text < 50:  # Texto muito escasso = provavelmente OCR foi usado
-                    method = ExtractionMethod.PDF_OCR
-
                 total = sum(len(p.text) for p in pages)
+                logger.info(f"DOBA {date_str}: {len(pages)} materias lidas ({total:,} chars)")
                 return DiarioContent(
                     journal="DOBA",
                     edition_date=target_date,
-                    method=method,
+                    method=ExtractionMethod.HTML,
                     pages=pages,
                     total_chars=total,
-                    source_url=pdf_url,
+                    source_url=f"{self.BASE_URL}/ver-html/{edicao_id}",
                 )
 
         except Exception as e:
-            logger.error(f"DOBA PDF: erro ao processar — {e}")
+            logger.error(f"DOBA erro: {e}")
             return None
-
-    async def _find_pdf_url(self, target_date: date) -> str | None:
-        """Descobre a URL do PDF do DOBA para uma data específica."""
-        # O portal lista os PDFs disponíveis em uma página de índice
-        index_url = f"{self.REVISTA_URL}"
-
-        try:
-            async with httpx.AsyncClient(headers=self.HEADERS, timeout=15) as client:
-                response = await client.get(index_url)
-                if response.status_code != 200:
-                    return None
-
-                soup = BeautifulSoup(response.text, "html.parser")
-                date_str = target_date.strftime("%d/%m/%Y")
-                date_str_alt = target_date.strftime("%d-%m-%Y")
-
-                # Procura links de PDF que contenham a data
-                for link in soup.find_all("a", href=True):
-                    href = link["href"]
-                    text = link.get_text()
-                    if (date_str in text or date_str_alt in text or
-                            date_str in href or date_str_alt in href):
-                        if href.endswith(".pdf") or "pdf" in href.lower():
-                            if not href.startswith("http"):
-                                href = f"{self.BASE_URL}{href}"
-                            return href
-
-        except Exception as e:
-            logger.error(f"DOBA: erro ao buscar índice de PDFs — {e}")
-
-        return None
 
     async def _extract_pdf_text(self, pdf_bytes: bytes) -> list[PageContent]:
         """Extrai texto do PDF (nativo primeiro, OCR como fallback)."""
@@ -480,10 +417,18 @@ class SearchEngine:
         return matches
 
     def _find_positions(self, text: str, term: str) -> list[int]:
-        """Encontra todas as posições de um termo no texto (case-insensitive)."""
+        """Encontra todas as posições de um termo no texto (case e acento insensíveis)."""
         import re
-        pattern = re.compile(re.escape(term), re.IGNORECASE)
-        return [m.start() for m in pattern.finditer(text)]
+        import unicodedata
+
+        def strip_accents(s: str) -> str:
+            return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn").upper()
+
+        norm_text = strip_accents(text)
+        norm_term = strip_accents(term)
+
+        pattern = re.compile(re.escape(norm_term))
+        return [m.start() for m in pattern.finditer(norm_text)]
 
     def _extract_context(
         self, text: str, pos: int, term: str, window: int
