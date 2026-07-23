@@ -46,6 +46,9 @@ async function apiFetch<T>(
 
   if (response.status === 401) {
     clearToken();
+    if (path.includes("/auth/login")) {
+      throw new Error("E-mail ou senha incorretos.");
+    }
     if (typeof window !== "undefined" && window.location.pathname !== "/login") {
       window.location.href = "/login";
     }
