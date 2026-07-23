@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
-import { auth, user as userApi } from "@/services/api";
+import { auth, user as userApi, competitions as competitionsApi } from "@/services/api";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/onboarding")({
@@ -90,6 +90,8 @@ function OnboardingPage() {
   const [selectedConcursos, setSelectedConcursos] = useState<Set<string>>(
     new Set(),
   );
+  const [concursosList, setConcursosList] = useState<string[]>(PRESET_CONCURSOS);
+  const [newConcursoInput, setNewConcursoInput] = useState("");
   const [tgToken, setTgToken] = useState("");
   const [tgChat, setTgChat] = useState("");
   const [initialSearch, setInitialSearch] = useState(true);
@@ -113,6 +115,23 @@ function OnboardingPage() {
           await userApi.addVariation(v);
         } catch {
           /* ignore duplicates */
+        }
+      }
+      // Add selected competitions
+      for (const concursoStr of selectedConcursos) {
+        try {
+          const parts = concursoStr.split(" — ");
+          const organ = parts[0] || concursoStr;
+          const pos = parts[1] || "Concurso";
+          await competitionsApi.create({
+            organ_name: organ,
+            position: pos,
+            year: new Date().getFullYear(),
+            status: "waiting_result",
+            is_active: true,
+          });
+        } catch {
+          /* non-blocking */
         }
       }
       if (tgToken && tgChat) {
@@ -307,10 +326,10 @@ function OnboardingPage() {
         {step === 3 && (
           <StepShell
             title="Seus concursos"
-            subtitle="Selecione os concursos que você quer acompanhar. Você pode ajustar depois."
+            subtitle="Selecione os concursos que você quer acompanhar ou adicione os seus próprios."
           >
             <div className="grid gap-2">
-              {PRESET_CONCURSOS.map((c) => {
+              {concursosList.map((c) => {
                 const checked = selectedConcursos.has(c);
                 return (
                   <label
@@ -337,13 +356,39 @@ function OnboardingPage() {
                   </label>
                 );
               })}
-              <Button
-                type="button"
-                variant="outline"
-                className="mt-1 justify-start"
-              >
-                <Plus className="h-4 w-4" /> Adicionar outro concurso…
-              </Button>
+
+              <div className="mt-3 flex gap-2">
+                <Input
+                  placeholder="Nome do concurso (ex.: TJ-SP — Escrevente)"
+                  value={newConcursoInput}
+                  onChange={(e) => setNewConcursoInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const val = newConcursoInput.trim();
+                      if (val) {
+                        setConcursosList((prev) => [...prev, val]);
+                        setSelectedConcursos((prev) => new Set(prev).add(val));
+                        setNewConcursoInput("");
+                      }
+                    }
+                  }}
+                  className="h-10 text-sm"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    const val = newConcursoInput.trim();
+                    if (!val) return;
+                    setConcursosList((prev) => [...prev, val]);
+                    setSelectedConcursos((prev) => new Set(prev).add(val));
+                    setNewConcursoInput("");
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-1" /> Adicionar
+                </Button>
+              </div>
             </div>
           </StepShell>
         )}
