@@ -869,6 +869,7 @@ async def _execute_search(
             duration = time.time() - start
 
             # Salva registros no banco
+            all_matches = []
             for journal_result in search_result["journals_searched"]:
                 record = SearchRecord(
                     user_id=user_id,
@@ -887,7 +888,6 @@ async def _execute_search(
                 await db.flush()
 
                 # Salva cada match
-                all_matches = []
                 for match_data in journal_result["matches"]:
                     match = SearchMatch(
                         search_id=record.id,
