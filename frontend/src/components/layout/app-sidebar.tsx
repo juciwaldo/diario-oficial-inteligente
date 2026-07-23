@@ -1,4 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { user as userApi } from "@/services/api";
 import {
   BarChart3,
   Search,
@@ -72,6 +74,16 @@ function NavRow({ item }: { item: NavItem }) {
 }
 
 export function AppSidebar() {
+  const [profile, setProfile] = useState<{ full_name?: string; email?: string } | null>(null);
+
+  useEffect(() => {
+    userApi.getProfile().then(setProfile).catch(() => {});
+  }, []);
+
+  const name = profile?.full_name || "Usuário";
+  const email = profile?.email || "";
+  const initial = (name[0] || email[0] || "U").toUpperCase();
+
   return (
     <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-60 flex-col border-r border-border bg-background">
       {/* Logo */}
@@ -103,14 +115,14 @@ export function AppSidebar() {
       {/* User footer */}
       <div className="flex items-center gap-3 px-4 py-4">
         <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
-          M
+          {initial}
         </div>
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-foreground">
-            Maria Silva
+            {name}
           </div>
           <div className="truncate text-xs text-muted-foreground">
-            maria@exemplo.com
+            {email}
           </div>
         </div>
       </div>
