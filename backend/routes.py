@@ -196,9 +196,26 @@ async def update_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    old_name = current_user.full_name
     for field, value in data.model_dump(exclude_none=True).items():
         setattr(current_user, field, value)
     db.add(current_user)
+
+    # Se alterou o nome completo, regenera variações automáticas
+    if data.full_name and data.full_name != old_name:
+        result = await db.execute(
+            select(NameVariation).where(
+                NameVariation.user_id == current_user.id,
+                NameVariation.is_auto_generated == True,
+            )
+        )
+        for v in result.scalars().all():
+            await db.delete(v)
+
+        new_variations = _generate_name_variations(data.full_name)
+        for var in new_variations:
+            db.add(NameVariation(user_id=current_user.id, variation=var, is_auto_generated=True))
+
     return {"message": "Perfil atualizado com sucesso"}
 
 
@@ -798,6 +815,10 @@ async def _execute_search(
                 )
             )
             variations = [v.variation for v in vars_result.scalars().all()]
+            if user.full_name and user.full_name not in variations:
+                variations.insert(0, user.full_name)
+            if not variations and user.full_name:
+                variations = _generate_name_variations(user.full_name)
 
             # Busca palavras-chave ativas
             kw_result = await db.execute(
