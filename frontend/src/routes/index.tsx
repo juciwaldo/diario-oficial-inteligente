@@ -18,7 +18,9 @@ import {
 
 export const Route = createFileRoute("/")({
   beforeLoad: () => {
-    throw redirect({ to: "/login" });
+    if (typeof window !== "undefined" && !localStorage.getItem("access_token")) {
+      throw redirect({ to: "/login" });
+    }
   },
   head: () => ({
     meta: [
