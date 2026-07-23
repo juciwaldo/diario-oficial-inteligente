@@ -62,15 +62,15 @@ class VariationRequest(BaseModel):
     variation: str
 
 class CompetitionRequest(BaseModel):
-    organ_name: str
-    position: str
-    year: int
-    status: str = "waiting_result"
+    organ_name: Optional[str] = None
+    position: Optional[str] = None
+    year: Optional[int] = None
+    status: Optional[str] = "waiting_result"
     registration_number: Optional[str] = None
     organizing_body: Optional[str] = None
     edital_url: Optional[str] = None
     notes: Optional[str] = None
-    is_active: bool = True
+    is_active: Optional[bool] = True
 
 class KeywordRequest(BaseModel):
     word: str
@@ -325,10 +325,33 @@ async def create_competition(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    comp = Competition(user_id=current_user.id, **data.model_dump())
+    organ = data.organ_name.strip() if data.organ_name else "Novo Concurso"
+    pos = data.position.strip() if data.position else "Cargo não especificado"
+    yr = data.year if data.year else datetime.now().year
+
+    comp = Competition(
+        user_id=current_user.id,
+        organ_name=organ,
+        position=pos,
+        year=yr,
+        status=data.status or "waiting_result",
+        registration_number=data.registration_number,
+        organizing_body=data.organizing_body,
+        edital_url=data.edital_url,
+        notes=data.notes,
+        is_active=data.is_active if data.is_active is not None else True,
+    )
     db.add(comp)
     await db.flush()
-    return {"id": comp.id, "message": "Concurso adicionado"}
+    return {
+        "id": comp.id,
+        "organ_name": comp.organ_name,
+        "position": comp.position,
+        "year": comp.year,
+        "status": comp.status,
+        "is_active": comp.is_active,
+        "message": "Concurso adicionado",
+    }
 
 
 @router.patch("/competitions/{comp_id}")
