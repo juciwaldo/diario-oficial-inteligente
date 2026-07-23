@@ -80,6 +80,7 @@ class KeywordRequest(BaseModel):
 class SearchRequest(BaseModel):
     journals: List[str] = ["DOU", "DOBA"]
     target_date: Optional[str] = None  # "YYYY-MM-DD" ou None para hoje
+    custom_term: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -511,6 +512,7 @@ async def run_search(
         journals=data.journals,
         target_date=target_date,
         triggered_by="manual",
+        custom_term=data.custom_term,
     )
 
     return res or {
@@ -790,6 +792,7 @@ async def _execute_search(
     journals: list[str],
     target_date: date,
     triggered_by: str = "scheduler",
+    custom_term: str | None = None,
 ):
     """
     Executa a pesquisa em background.
@@ -807,18 +810,22 @@ async def _execute_search(
             if not user:
                 return
 
-            # Busca variações ativas
-            vars_result = await db.execute(
-                select(NameVariation).where(
-                    NameVariation.user_id == user_id,
-                    NameVariation.is_active == True,
+            if custom_term and custom_term.strip():
+                term = custom_term.strip()
+                variations = [term] + _generate_name_variations(term)
+            else:
+                # Busca variações ativas
+                vars_result = await db.execute(
+                    select(NameVariation).where(
+                        NameVariation.user_id == user_id,
+                        NameVariation.is_active == True,
+                    )
                 )
-            )
-            variations = [v.variation for v in vars_result.scalars().all()]
-            if user.full_name and user.full_name not in variations:
-                variations.insert(0, user.full_name)
-            if not variations and user.full_name:
-                variations = _generate_name_variations(user.full_name)
+                variations = [v.variation for v in vars_result.scalars().all()]
+                if user.full_name and user.full_name not in variations:
+                    variations.insert(0, user.full_name)
+                if not variations and user.full_name:
+                    variations = _generate_name_variations(user.full_name)
 
             # Busca palavras-chave ativas
             kw_result = await db.execute(

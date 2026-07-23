@@ -43,6 +43,7 @@ export function SearchDialog({ open, onOpenChange }: Props) {
   const [periodo, setPeriodo] = useState<Periodo>("hoje");
   const [dateFrom, setDateFrom] = useState<Date>();
   const [dateTo, setDateTo] = useState<Date>();
+  const [customTerm, setCustomTerm] = useState("");
   const [searchResult, setSearchResult] = useState<any>(null);
 
   useEffect(() => {
@@ -74,6 +75,8 @@ export function SearchDialog({ open, onOpenChange }: Props) {
             setDateFrom={setDateFrom}
             dateTo={dateTo}
             setDateTo={setDateTo}
+            customTerm={customTerm}
+            setCustomTerm={setCustomTerm}
             onCancel={() => onOpenChange(false)}
             onStart={() => {
               const journals = Object.keys(selected).filter((k) => selected[k]);
@@ -94,6 +97,7 @@ export function SearchDialog({ open, onOpenChange }: Props) {
                 ? format(dateFrom, "yyyy-MM-dd")
                 : undefined
             }
+            customTerm={customTerm}
             onCancel={() => onOpenChange(false)}
             onDone={(res) => {
               setSearchResult(res);
@@ -125,6 +129,8 @@ function ConfigStep(props: {
   setDateFrom: (d: Date | undefined) => void;
   dateTo: Date | undefined;
   setDateTo: (d: Date | undefined) => void;
+  customTerm: string;
+  setCustomTerm: (t: string) => void;
   onCancel: () => void;
   onStart: () => void;
 }) {
@@ -137,20 +143,39 @@ function ConfigStep(props: {
     setDateFrom,
     dateTo,
     setDateTo,
+    customTerm,
+    setCustomTerm,
     onCancel,
     onStart,
   } = props;
 
   const canStart =
     Object.values(selected).some(Boolean) &&
-    (periodo !== "custom" || (dateFrom && dateTo));
+    (periodo !== "custom" || Boolean(dateFrom));
 
   return (
     <div>
       <h2 className="text-xl font-semibold text-white">Pesquisa Manual</h2>
       <p className="mt-1 text-sm text-slate-400">
-        Selecione os diários e o período
+        Selecione os diários, período e termo de busca
       </p>
+
+      {/* Termo / Nome Opcional */}
+      <div className="mt-4">
+        <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Nome ou Termo de Pesquisa (opcional)
+        </label>
+        <input
+          type="text"
+          value={customTerm}
+          onChange={(e) => setCustomTerm(e.target.value)}
+          placeholder="Ex: GISÁH MICHELS CHEIN"
+          className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-blue-500 focus:outline-none"
+        />
+        <p className="mt-1 text-[11px] text-slate-500">
+          Se deixar em branco, o sistema buscará todas as variações do seu nome cadastrado.
+        </p>
+      </div>
 
       {/* Diários */}
       <div className="mt-5">
@@ -247,11 +272,11 @@ function ConfigStep(props: {
         {periodo === "custom" && (
           <div className="mt-3 grid grid-cols-2 gap-2">
             <DateField
-              label="De"
+              label="De (Data Inicial)"
               value={dateFrom}
               onChange={setDateFrom}
             />
-            <DateField label="Até" value={dateTo} onChange={setDateTo} />
+            <DateField label="Até (Data Final)" value={dateTo} onChange={setDateTo} />
           </div>
         )}
       </div>
@@ -325,11 +350,13 @@ function DateField({
 function ProgressStep({
   selectedCodes,
   targetDate,
+  customTerm,
   onCancel,
   onDone,
 }: {
   selectedCodes: string[];
   targetDate?: string;
+  customTerm?: string;
   onCancel: () => void;
   onDone: (res: any) => void;
 }) {
@@ -347,7 +374,7 @@ function ProgressStep({
     let active = true;
     (async () => {
       try {
-        const res = await searchApi.run(selectedCodes, targetDate);
+        const res = await searchApi.run(selectedCodes, targetDate, customTerm);
         if (active) {
           onDone(res);
         }
