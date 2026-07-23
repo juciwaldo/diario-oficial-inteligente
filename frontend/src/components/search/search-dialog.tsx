@@ -43,11 +43,15 @@ export function SearchDialog({ open, onOpenChange }: Props) {
   const [periodo, setPeriodo] = useState<Periodo>("hoje");
   const [dateFrom, setDateFrom] = useState<Date>();
   const [dateTo, setDateTo] = useState<Date>();
+  const [searchResult, setSearchResult] = useState<any>(null);
 
   useEffect(() => {
     if (!open) {
       // reset when closed
-      const t = setTimeout(() => setPhase("config"), 200);
+      const t = setTimeout(() => {
+        setPhase("config");
+        setSearchResult(null);
+      }, 200);
       return () => clearTimeout(t);
     }
   }, [open]);
@@ -71,23 +75,13 @@ export function SearchDialog({ open, onOpenChange }: Props) {
             dateTo={dateTo}
             setDateTo={setDateTo}
             onCancel={() => onOpenChange(false)}
-            onStart={async () => {
+            onStart={() => {
               const journals = Object.keys(selected).filter((k) => selected[k]);
               if (!journals.length) {
                 toast.error("Selecione ao menos um diário");
                 return;
               }
               setPhase("progress");
-              try {
-                const targetDate =
-                  periodo === "custom" && dateFrom
-                    ? format(dateFrom, "yyyy-MM-dd")
-                    : undefined;
-                await searchApi.run(journals, targetDate);
-                toast.success("Pesquisa iniciada");
-              } catch (err: any) {
-                toast.error(err?.message || "Falha ao iniciar pesquisa");
-              }
             }}
           />
         )}
@@ -95,19 +89,25 @@ export function SearchDialog({ open, onOpenChange }: Props) {
         {phase === "progress" && (
           <ProgressStep
             selectedCodes={Object.keys(selected).filter((k) => selected[k])}
-            onCancel={() => onOpenChange(false)}
-            onDone={(found) =>
-              setPhase(found ? "done-found" : "done-empty")
+            targetDate={
+              periodo === "custom" && dateFrom
+                ? format(dateFrom, "yyyy-MM-dd")
+                : undefined
             }
+            onCancel={() => onOpenChange(false)}
+            onDone={(res) => {
+              setSearchResult(res);
+              setPhase((res?.total_matches || 0) > 0 ? "done-found" : "done-empty");
+            }}
           />
         )}
 
         {phase === "done-empty" && (
-          <DoneEmpty onClose={() => onOpenChange(false)} />
+          <DoneEmpty result={searchResult} onClose={() => onOpenChange(false)} />
         )}
 
         {phase === "done-found" && (
-          <DoneFound onClose={() => onOpenChange(false)} />
+          <DoneFound result={searchResult} onClose={() => onOpenChange(false)} />
         )}
       </DialogContent>
     </Dialog>
@@ -324,20 +324,15 @@ function DateField({
 
 function ProgressStep({
   selectedCodes,
+  targetDate,
   onCancel,
   onDone,
 }: {
   selectedCodes: string[];
+  targetDate?: string;
   onCancel: () => void;
-  onDone: (found: boolean) => void;
+  onDone: (res: any) => void;
 }) {
-  const diarios = useMemo(
-    () => DIARIOS.filter((d) => selectedCodes.includes(d.code)),
-    [selectedCodes],
-  );
-  const totalPages = diarios.reduce((sum, d) => sum + d.pages, 0);
-
-  const [analyzedPages, setAnalyzedPages] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
 
@@ -349,128 +344,41 @@ function ProgressStep({
   }, []);
 
   useEffect(() => {
-    const step = setInterval(() => {
-      setAnalyzedPages((p) => {
-        const next = p + Math.max(3, Math.round(totalPages / 40));
-        if (next >= totalPages) {
-          clearInterval(step);
-          setTimeout(() => onDone(Math.random() > 0.5), 400);
-          return totalPages;
+    let active = true;
+    (async () => {
+      try {
+        const res = await searchApi.run(selectedCodes, targetDate);
+        if (active) {
+          onDone(res);
         }
-        return next;
-      });
-    }, 180);
-    return () => clearInterval(step);
+      } catch (err: any) {
+        if (active) {
+          toast.error(err?.message || "Erro na pesquisa");
+          onDone({ total_matches: 0, matches: [], duration_seconds: 0 });
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const overallPct = Math.min(100, (analyzedPages / totalPages) * 100);
-
-  // Compute per-diario status
-  let pagesRemaining = analyzedPages;
-  const perDiario = diarios.map((d) => {
-    const done = Math.min(d.pages, pagesRemaining);
-    pagesRemaining = Math.max(0, pagesRemaining - d.pages);
-    let status: "waiting" | "downloading" | "extracting" | "searching" | "done";
-    if (done === 0) status = "waiting";
-    else if (done < d.pages) status = "searching";
-    else status = "done";
-    return { ...d, done, status };
-  });
-
-  // Force first diario to show downloading/extracting steps when it's mid-way
-  const firstActiveIndex = perDiario.findIndex((d) => d.status !== "done");
-
   return (
-    <div>
+    <div className="py-6 text-center">
       <h2 className="text-xl font-semibold text-white">
-        Pesquisa em Andamento...
+        Varrendo Diários Oficiais...
       </h2>
+      <p className="mt-2 text-sm text-slate-400">
+        Buscando variações de nome e termos de convocação em {selectedCodes.join(", ")}.
+      </p>
 
-      {/* overall bar */}
-      <div className="relative mt-4 h-3 w-full overflow-hidden rounded-full bg-slate-700">
-        <div
-          className="h-full rounded-full bg-blue-600 transition-all duration-500 ease-out"
-          style={{ width: `${overallPct}%` }}
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/25 to-transparent animate-shimmer"
-        />
+      <div className="mt-8 flex justify-center">
+        <Loader2 className="h-10 w-10 animate-spin text-blue-500" />
       </div>
 
-      {/* steps */}
-      <ul className="mt-5 space-y-3">
-        {perDiario.map((d, idx) => {
-          if (d.status === "waiting") {
-            return (
-              <StepRow
-                key={d.code}
-                icon={<Clock className="h-4 w-4 text-slate-500" />}
-                label={`${d.code} — Aguardando...`}
-                muted
-              />
-            );
-          }
-          if (d.status === "done") {
-            return (
-              <div key={d.code} className="space-y-2">
-                <StepRow
-                  icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
-                  label={`${d.code} — Download completo (${d.sizeMb} MB)`}
-                />
-                <StepRow
-                  icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
-                  label={`${d.code} — Extração de texto concluída (${d.pages} páginas)`}
-                />
-                <StepRow
-                  icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
-                  label={`${d.code} — Pesquisa concluída`}
-                />
-              </div>
-            );
-          }
-          // searching
-          return (
-            <div key={d.code} className="space-y-2">
-              <StepRow
-                icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
-                label={`${d.code} — Download completo (${d.sizeMb} MB)`}
-              />
-              <StepRow
-                icon={<CheckCircle2 className="h-4 w-4 text-green-500" />}
-                label={`${d.code} — Extração de texto concluída (${d.pages} páginas)`}
-              />
-              <div>
-                <StepRow
-                  icon={
-                    <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
-                  }
-                  label={`${d.code} — Pesquisando...`}
-                />
-                <div className="ml-7 mt-1 text-xs text-slate-400">
-                  {d.done} / {d.pages} páginas
-                </div>
-              </div>
-              {/* remaining ones show waiting */}
-              {perDiario.slice(idx + 1).map((next) => (
-                <StepRow
-                  key={next.code}
-                  icon={<Clock className="h-4 w-4 text-slate-500" />}
-                  label={`${next.code} — Aguardando...`}
-                  muted
-                />
-              ))}
-            </div>
-          );
-        })}
-        {firstActiveIndex === -1 && null}
-      </ul>
-
-      <div className="mt-5 flex items-center justify-between text-xs text-slate-400">
-        <span>
-          {analyzedPages} páginas analisadas · {formatElapsed(elapsed)}
-        </span>
+      <div className="mt-8 flex items-center justify-between text-xs text-slate-400">
+        <span>Tempo decorrido: {formatElapsed(elapsed)}</span>
         <button
           onClick={onCancel}
           className="rounded-md px-2 py-1 text-red-400 transition hover:bg-red-500/10"
@@ -478,32 +386,6 @@ function ProgressStep({
           Cancelar pesquisa
         </button>
       </div>
-    </div>
-  );
-}
-
-function StepRow({
-  icon,
-  label,
-  muted,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  muted?: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-        {icon}
-      </span>
-      <span
-        className={cn(
-          "text-sm",
-          muted ? "text-slate-500" : "text-slate-200",
-        )}
-      >
-        {label}
-      </span>
     </div>
   );
 }
@@ -516,7 +398,8 @@ function formatElapsed(seconds: number) {
 
 /* ---------- STEP 3: Done Empty ---------- */
 
-function DoneEmpty({ onClose }: { onClose: () => void }) {
+function DoneEmpty({ result, onClose }: { result: any; onClose: () => void }) {
+  const duration = result?.duration_seconds ? `${result.duration_seconds}s` : "poucos segundos";
   return (
     <div className="flex flex-col items-center py-4 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-500/10 ring-1 ring-green-500/30">
@@ -526,10 +409,10 @@ function DoneEmpty({ onClose }: { onClose: () => void }) {
         Pesquisa concluída!
       </h2>
       <p className="mt-1 text-sm text-slate-400">
-        167 páginas analisadas · 0 resultados · 2m 43s
+        0 resultados encontrados em {duration}.
       </p>
       <p className="mt-3 text-sm text-slate-300">
-        Continue estudando! Nenhuma citação hoje.
+        Nenhuma citação encontrada nesta edição. O sistema continuará monitorando diariamente.
       </p>
       <button
         onClick={onClose}
@@ -543,7 +426,13 @@ function DoneEmpty({ onClose }: { onClose: () => void }) {
 
 /* ---------- STEP 4: Done Found ---------- */
 
-function DoneFound({ onClose }: { onClose: () => void }) {
+function DoneFound({ result, onClose }: { result: any; onClose: () => void }) {
+  const match = result?.matches?.[0];
+  const count = result?.total_matches || 1;
+  const journal = match?.journal || "Diário Oficial";
+  const page = match?.page_number ? `Página ${match.page_number} do ` : "";
+  const variation = match?.variation_found ? ` — ${match.variation_found}` : "";
+
   return (
     <div className="flex flex-col items-center py-4 text-center">
       <div className="relative flex h-16 w-16 items-center justify-center">
@@ -552,10 +441,10 @@ function DoneFound({ onClose }: { onClose: () => void }) {
         <AlertCircle className="relative h-9 w-9 text-red-500" />
       </div>
       <h2 className="mt-4 text-xl font-semibold text-white">
-        1 resultado encontrado!
+        {count} resultado{count > 1 ? "s" : ""} encontrado{count > 1 ? "s" : ""}!
       </h2>
       <p className="mt-1 text-sm text-slate-400">
-        Página 52 do DOBA — Convocação
+        {page}{journal}{variation}
       </p>
       <div className="mt-6 flex items-center gap-2">
         <button
@@ -564,12 +453,13 @@ function DoneFound({ onClose }: { onClose: () => void }) {
         >
           Fechar
         </button>
-        <button
+        <Link
+          to="/historico"
           onClick={onClose}
           className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
         >
           Ver detalhes →
-        </button>
+        </Link>
       </div>
     </div>
   );

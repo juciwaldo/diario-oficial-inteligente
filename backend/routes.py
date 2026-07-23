@@ -483,26 +483,26 @@ async def delete_keyword(
 @router.post("/search/run")
 async def run_search(
     data: SearchRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Inicia pesquisa manual em background. Retorna imediatamente."""
+    """Inicia pesquisa manual e retorna os resultados reais encontrados."""
     target_date = date.fromisoformat(data.target_date) if data.target_date else date.today()
 
-    # Adiciona à fila em background (não bloqueia a resposta)
-    background_tasks.add_task(
-        _execute_search,
+    res = await _execute_search(
         user_id=current_user.id,
         journals=data.journals,
         target_date=target_date,
         triggered_by="manual",
     )
 
-    return {
-        "message": "Pesquisa iniciada",
+    return res or {
+        "message": "Pesquisa concluída",
         "journals": data.journals,
         "date": target_date.isoformat(),
+        "total_matches": 0,
+        "matches": [],
+        "duration_seconds": 0,
     }
 
 
@@ -842,6 +842,7 @@ async def _execute_search(
                 await db.flush()
 
                 # Salva cada match
+                all_matches = []
                 for match_data in journal_result["matches"]:
                     match = SearchMatch(
                         search_id=record.id,
@@ -853,6 +854,16 @@ async def _execute_search(
                         relevance_score=match_data.get("score", 1.0),
                     )
                     db.add(match)
+                    await db.flush()
+                    all_matches.append({
+                        "id": match.id,
+                        "journal": journal_result["journal"],
+                        "page_number": match.page_number,
+                        "variation_found": match.variation_found,
+                        "context_text": match.context_text[:300],
+                        "keywords_nearby": match_data.get("keywords_nearby", []),
+                        "relevance_score": match.relevance_score,
+                    })
 
                     # Envia notificação Telegram se configurado
                     if user.telegram_notifications and user.telegram_bot_token and user.telegram_chat_id:
@@ -860,12 +871,28 @@ async def _execute_search(
 
             await db.commit()
             print(f"[SEARCH] Concluído: {search_result['total_matches']} match(es) em {duration:.1f}s")
+            return {
+                "message": "Pesquisa concluída",
+                "journals": journals,
+                "date": target_date.isoformat(),
+                "total_matches": len(all_matches),
+                "matches": all_matches,
+                "duration_seconds": round(duration, 2),
+            }
 
         except Exception as e:
             await db.rollback()
             print(f"[SEARCH] Erro: {e}")
             import traceback
             traceback.print_exc()
+            return {
+                "message": f"Erro na pesquisa: {str(e)}",
+                "journals": journals,
+                "date": target_date.isoformat(),
+                "total_matches": 0,
+                "matches": [],
+                "duration_seconds": 0,
+            }
 
 
 async def _send_telegram_alert(user: User, match: dict, journal: str, target_date: date):
