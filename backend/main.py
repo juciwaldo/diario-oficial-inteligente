@@ -71,15 +71,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8080",
-        "https://9540ed17-ccbd-4a63-abc5-6bf36d14ab17.lovableproject.com",
-        "https://id-preview--9540ed17-ccbd-4a63-abc5-6bf36d14ab17.lovable.app",
-        "https://monitoramentodiariooficial.lovable.app",
-    ],
-    allow_origin_regex=r"https://.*\.(lovableproject\.com|lovable\.app|trycloudflare\.com|vercel\.app)$",
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
