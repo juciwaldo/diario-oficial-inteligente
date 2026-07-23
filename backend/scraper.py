@@ -13,6 +13,7 @@ Diários suportados:
 
 import httpx
 import asyncio
+import json
 from datetime import date, datetime
 from bs4 import BeautifulSoup
 from dataclasses import dataclass
@@ -72,9 +73,9 @@ class DOUScraper:
     JORNAL_URL = "https://www.in.gov.br/leiturajornal"
 
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (compatible; DiarioInteligente/1.0)",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "pt-BR,pt;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
     }
 
     SECTIONS = ["do1", "do2", "do3"]  # Seções 1, 2 e 3
@@ -87,10 +88,11 @@ class DOUScraper:
         date_str = target_date.strftime("%d-%m-%Y")
         all_pages = []
 
-        async with httpx.AsyncClient(headers=self.HEADERS, timeout=30) as client:
+        async with httpx.AsyncClient(headers=self.HEADERS, timeout=30.0, follow_redirects=True) as client:
             for section in self.SECTIONS:
-                url = f"{self.JORNAL_URL}?data={date_str}&jornal={section}"
-                logger.info(f"DOU HTML: buscando {section} em {date_str}")
+                # Tenta primeiro com o parâmetro "secao" e depois "jornal" se necessário
+                url = f"{self.JORNAL_URL}?data={date_str}&secao={section}"
+                logger.info(f"DOU HTML: buscando {section} em {date_str} -> {url}")
 
                 try:
                     response = await client.get(url)
@@ -99,11 +101,84 @@ class DOUScraper:
                         logger.warning(f"DOU {section}: HTTP {response.status_code}")
                         continue
 
-                    pages = self._parse_html(response.text, section)
-                    all_pages.extend(pages)
-                    logger.info(f"DOU {section}: {len(pages)} blocos extraídos")
+                    # Extrai a lista de matérias do script#params
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    script_tag = soup.find("script", id="params")
+                    
+                    if not script_tag:
+                        logger.warning(f"DOU {section}: script#params não encontrado")
+                        continue
 
-                    # Respeita o servidor — pausa entre seções
+                    try:
+                        json_data = json.loads(script_tag.string or "")
+                        json_array = json_data.get("jsonArray", [])
+                    except Exception as json_err:
+                        logger.error(f"DOU {section}: erro ao decodificar JSON do script: {json_err}")
+                        continue
+
+                    if not json_array:
+                        logger.info(f"DOU {section}: nenhuma matéria encontrada")
+                        continue
+
+                    logger.info(f"DOU {section}: extraídas {len(json_array)} matérias no índice")
+
+                    # Download das matérias em paralelo com semáforo para controle de concorrência
+                    sem = asyncio.Semaphore(20)
+
+                    async def fetch_article(item):
+                        url_title = item.get("urlTitle")
+                        if not url_title:
+                            return None
+                        art_url = f"{self.BASE_URL}/web/dou/-/{url_title}"
+                        async with sem:
+                            try:
+                                # Verifica se a matéria já tem o conteúdo bruto disponível no JSON
+                                content_text = item.get("content") or item.get("materia")
+                                if content_text and len(content_text) > 50:
+                                    if "<" in content_text and ">" in content_text:
+                                        content_text = BeautifulSoup(content_text, "html.parser").get_text(separator=" ", strip=True)
+                                    return art_url, content_text, item.get("pageNumber", "1"), item.get("title", "")
+
+                                # Senão, baixa o artigo completo
+                                res = await client.get(art_url, timeout=15)
+                                if res.status_code == 200:
+                                    art_soup = BeautifulSoup(res.text, "html.parser")
+                                    art_body = (
+                                        art_soup.select_one("div.texto-dou") or
+                                        art_soup.select_one("div.dou-paragraph") or
+                                        art_soup.select_one("article.materia") or
+                                        art_soup.select_one("div.materia-texto") or
+                                        art_soup.select_one("div#detalheMateria") or
+                                        art_soup.select_one("body")
+                                    )
+                                    if art_body:
+                                        text = art_body.get_text(separator=" ", strip=True)
+                                        text = self._normalize_text(text)
+                                        return art_url, text, item.get("pageNumber", "1"), item.get("title", "")
+                            except Exception as ex:
+                                logger.warning(f"DOU: erro ao baixar matéria {url_title}: {ex}")
+                        return None
+
+                    tasks = [fetch_article(item) for item in json_array]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    page_num = len(all_pages)
+                    for res in results:
+                        if isinstance(res, tuple):
+                            art_url, text, page_val, title = res
+                            if len(text) > 20:
+                                page_num += 1
+                                try:
+                                    p_num = int(page_val)
+                                except ValueError:
+                                    p_num = page_num
+                                all_pages.append(PageContent(
+                                    page_number=p_num,
+                                    text=text,
+                                    section=title or section.upper(),
+                                ))
+
+                    logger.info(f"DOU {section}: {len(all_pages)} matérias processadas com sucesso")
                     await asyncio.sleep(1)
 
                 except httpx.TimeoutException:
@@ -116,7 +191,7 @@ class DOUScraper:
             return None
 
         total = sum(len(p.text) for p in all_pages)
-        logger.info(f"DOU {date_str}: {len(all_pages)} blocos, {total:,} caracteres")
+        logger.info(f"DOU {date_str}: {len(all_pages)} matérias, {total:,} caracteres")
 
         return DiarioContent(
             journal="DOU",
@@ -126,58 +201,6 @@ class DOUScraper:
             total_chars=total,
             source_url=f"{self.JORNAL_URL}?data={date_str}",
         )
-
-    def _parse_html(self, html: str, section: str) -> list[PageContent]:
-        """Extrai blocos de texto do HTML do DOU."""
-        soup = BeautifulSoup(html, "html.parser")
-        pages = []
-        page_num = 0
-
-        # O DOU organiza publicações em divs com classe "dou-paragraph" ou similar
-        # Cada publicação é um bloco independente
-        selectors = [
-            "div.dou-paragraph",   # Padrão atual
-            "article.materia",     # Formato alternativo
-            "div.materia-texto",   # Outro formato possível
-            "p",                   # Fallback genérico
-        ]
-
-        blocks = []
-        for selector in selectors:
-            blocks = soup.select(selector)
-            if blocks:
-                break
-
-        # Se nenhum seletor específico funcionou, pega o texto do body completo
-        if not blocks:
-            body_text = soup.get_text(separator="\n", strip=True)
-            if len(body_text) > 100:
-                pages.append(PageContent(
-                    page_number=1,
-                    text=body_text,
-                    section=section.upper(),
-                ))
-            return pages
-
-        for block in blocks:
-            text = block.get_text(separator=" ", strip=True)
-            text = self._normalize_text(text)
-
-            if len(text) < 20:  # Ignora blocos muito pequenos
-                continue
-
-            page_num += 1
-            # Tenta identificar a seção/tipo do bloco pelo título
-            title_elem = block.find(["h1", "h2", "h3", "strong", "b"])
-            section_name = title_elem.get_text(strip=True) if title_elem else section.upper()
-
-            pages.append(PageContent(
-                page_number=page_num,
-                text=text,
-                section=section_name,
-            ))
-
-        return pages
 
     def _normalize_text(self, text: str) -> str:
         """Remove espaços extras e normaliza o texto."""

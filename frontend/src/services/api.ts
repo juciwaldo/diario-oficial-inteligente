@@ -3,7 +3,8 @@
 // Serviço central de conexão com o backend FastAPI
 // ─────────────────────────────────────────────────────────────
 
-const API_BASE = "https://tigers-celebrities-continuing-growing.trycloudflare.com";
+const API_BASE =
+  import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 // ─── Token JWT ───────────────────────────────────────────────
 

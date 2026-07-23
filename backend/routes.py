@@ -18,6 +18,8 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from datetime import date, datetime
 import json
+import time
+import asyncio
 
 from database import get_db, User, NameVariation, Competition, Keyword, SearchRecord, SearchMatch
 from auth import hash_password, verify_password, create_access_token, get_current_user
