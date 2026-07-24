@@ -285,7 +285,7 @@ export const search = {
     startDate?: string,
     endDate?: string,
   ) {
-    return apiFetch<{ message: string; journals: string[]; date?: string; start_date?: string; end_date?: string; total_matches?: number; matches?: any[] }>(
+    return apiFetch<{ message: string; journals: string[]; date?: string; start_date?: string; end_date?: string; total_matches?: number; matches?: any[]; errors?: string[] }>(
       "/api/v1/search/run",
       {
         method: "POST",

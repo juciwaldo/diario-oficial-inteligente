@@ -936,6 +936,7 @@ async def _execute_search(
                 "date": target_date.isoformat(),
                 "total_matches": 0,
                 "matches": [],
+                "errors": [f"{target_date.strftime('%d/%m/%Y')}: {str(e)}"],
                 "duration_seconds": 0,
             }
 
@@ -970,10 +971,11 @@ async def _execute_search_range(
         cur += timedelta(days=1)
 
     all_matches_accumulated = []
+    accumulated_errors = []
     start_time = time.time()
 
-    # Processa datas em lotes de até 5
-    batch_size = 5
+    # Processa datas em lotes reduzidos de 2 para estabilidade de concorrência
+    batch_size = 2
     for i in range(0, len(date_list), batch_size):
         batch_dates = date_list[i:i+batch_size]
         tasks = [
@@ -987,9 +989,16 @@ async def _execute_search_range(
             for d in batch_dates
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        for res in results:
-            if isinstance(res, dict) and res.get("total_matches", 0) > 0:
-                all_matches_accumulated.extend(res.get("matches", []))
+        for d, res in zip(batch_dates, results):
+            if isinstance(res, Exception):
+                accumulated_errors.append(f"{d.strftime('%d/%m/%Y')}: {str(res)}")
+            elif isinstance(res, dict):
+                if res.get("total_matches", 0) > 0:
+                    all_matches_accumulated.extend(res.get("matches", []))
+                if res.get("errors"):
+                    accumulated_errors.extend(res.get("errors"))
+                elif "message" in res and res["message"].startswith("Erro"):
+                    accumulated_errors.append(f"{d.strftime('%d/%m/%Y')}: {res['message']}")
 
     duration = time.time() - start_time
     return {
@@ -999,6 +1008,7 @@ async def _execute_search_range(
         "end_date": end_date.isoformat(),
         "total_matches": len(all_matches_accumulated),
         "matches": all_matches_accumulated,
+        "errors": accumulated_errors if accumulated_errors else None,
         "duration_seconds": round(duration, 2),
     }
 

@@ -122,8 +122,8 @@ class DOUScraper:
 
                     logger.info(f"DOU {section}: extraídas {len(json_array)} matérias no índice")
 
-                    # Download das matérias em paralelo com semáforo para controle de concorrência
-                    sem = asyncio.Semaphore(20)
+                    # Download das matérias em paralelo com semáforo controlado (8 conexões simultâneas)
+                    sem = asyncio.Semaphore(8)
 
                     async def fetch_article(item):
                         url_title = item.get("urlTitle")
@@ -230,16 +230,17 @@ class DOBAScraper:
     }
 
     async def _get_with_retry(self, client: httpx.AsyncClient, url: str, retries: int = 3) -> httpx.Response | None:
-        """Faz requisição HTTP com até 'retries' tentativas em caso de instabilidade de rede."""
+        """Faz requisição HTTP com até 'retries' tentativas em caso de instabilidade de rede ou status 429/503."""
         for attempt in range(retries):
             try:
                 res = await client.get(url)
                 if res.status_code == 200:
                     return res
+                logger.warning(f"DOBA: HTTP {res.status_code} ao acessar {url} (tentativa {attempt + 1}/{retries})")
             except Exception as ex:
                 if attempt == retries - 1:
                     logger.warning(f"DOBA: falha final ao acessar {url}: {ex}")
-                await asyncio.sleep(0.4 * (attempt + 1))
+            await asyncio.sleep(0.5 * (attempt + 1))
         return None
 
     async def fetch(self, target_date: date = None) -> DiarioContent | None:
@@ -281,9 +282,9 @@ class DOBAScraper:
                     logger.warning(f"DOBA edicao {edicao_id}: nenhuma materia cadastrada")
                     return None
 
-                # Baixa materias em paralelo com semáforo para evitar rate limit
+                # Baixa materias em paralelo com semáforo de concorrência reduzida (8 conexões simultâneas)
                 pages = []
-                sem = asyncio.Semaphore(25)
+                sem = asyncio.Semaphore(8)
 
                 async def fetch_materia(m_id):
                     async with sem:
