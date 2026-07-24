@@ -238,7 +238,8 @@ class DOBAScraper:
         logger.info(f"DOBA: buscando edicao para {date_str}")
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0, headers=self.HEADERS) as client:
+            limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
+            async with httpx.AsyncClient(verify=False, timeout=45.0, headers=self.HEADERS, limits=limits) as client:
                 api_url = f"{self.BASE_URL}/apifront/portal/edicoes/edicoes_from_data/{date_str}"
                 res = await client.get(api_url)
                 if res.status_code != 200:
@@ -267,17 +268,28 @@ class DOBAScraper:
                     logger.warning(f"DOBA edicao {edicao_id}: nenhuma materia cadastrada")
                     return None
 
-                # Baixa materias em paralelo em lotes
+                # Baixa materias em paralelo com semáforo para evitar rate limit
                 pages = []
-                batch_size = 30
-                for i in range(0, len(materias), batch_size):
-                    batch = materias[i:i+batch_size]
-                    tasks = [client.get(f"{self.BASE_URL}/apifront/portal/edicoes/publicacoes_ver_conteudo/{m_id}") for m_id in batch]
-                    responses = await asyncio.gather(*tasks, return_exceptions=True)
+                sem = asyncio.Semaphore(25)
 
-                    for m_id, r in zip(batch, responses):
-                        if isinstance(r, httpx.Response) and r.status_code == 200:
-                            m_soup = BeautifulSoup(r.text, "html.parser")
+                async def fetch_materia(m_id):
+                    async with sem:
+                        try:
+                            r = await client.get(f"{self.BASE_URL}/apifront/portal/edicoes/publicacoes_ver_conteudo/{m_id}")
+                            if r.status_code == 200:
+                                return m_id, r.text
+                        except Exception as ex:
+                            logger.warning(f"DOBA: erro ao baixar materia {m_id}: {ex}")
+                        return m_id, None
+
+                tasks = [fetch_materia(m_id) for m_id in materias]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                for res in results:
+                    if isinstance(res, tuple):
+                        m_id, html_content = res
+                        if html_content:
+                            m_soup = BeautifulSoup(html_content, "html.parser")
                             text = m_soup.get_text(separator=" ", strip=True)
                             if len(text) > 30:
                                 pages.append(PageContent(
@@ -440,7 +452,7 @@ class SearchEngine:
         return matches
 
     def _find_positions(self, text: str, term: str) -> list[int]:
-        """Encontra todas as posições de um termo no texto (case e acento insensíveis)."""
+        """Encontra todas as posições de um termo no texto (case, acento e quebras de linha insensíveis)."""
         import re
         import unicodedata
 
@@ -450,7 +462,12 @@ class SearchEngine:
         norm_text = strip_accents(text)
         norm_term = strip_accents(term)
 
-        pattern = re.compile(re.escape(norm_term))
+        words = norm_term.split()
+        if not words:
+            return []
+
+        pattern_str = r"\s+".join(re.escape(w) for w in words)
+        pattern = re.compile(pattern_str)
         return [m.start() for m in pattern.finditer(norm_text)]
 
     def _extract_context(
