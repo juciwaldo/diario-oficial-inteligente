@@ -1,49 +1,61 @@
 # 📜 Documentação Técnica Completa — Sistema Diário Oficial Inteligente
 
-> **Documento preparado para Auditoria Técnica e Verificação pelo Claude Sonnet / Engenharia de Software.**  
-> **Data de Atualização**: 23 de Julho de 2026  
+> **Documento Atualizado para Auditoria Técnica e Verificação pelo Claude Sonnet / Engenharia de Software.**  
+> **Data de Atualização**: 24 de Julho de 2026  
 > **Repositório**: [juciwaldo/diario-oficial-inteligente](https://github.com/juciwaldo/diario-oficial-inteligente)  
-> **Escopo**: Arquitetura, Modelos de Dados, Scraping Nativo DOBA/DOU, Algoritmos de Normalização Unicode, API RESTful, Frontend e Estratégia de Deploy.
+> **Backend Production API**: `https://diario-oficial-inteligente.onrender.com`  
+> **Escopo**: Arquitetura, Modelos de Dados, Scraping DOBA/DOU, Algoritmo Regex de Quebra de Linha e Unicode, Intervalo de Datas, Autenticação JWT e Deploy no Render.
 
 ---
 
 ## 📌 1. Visão Geral do Sistema
 
-O **Diário Oficial Inteligente** é uma plataforma SAAS projetada para automatizar o monitoramento contínuo de **Diários Oficiais** (com foco no **DOBA — Diário Oficial do Estado da Bahia** e **DOU — Diário Oficial da União**). 
+O **Diário Oficial Inteligente** é uma plataforma SaaS desenvolvida para monitorar e auditar publicações em **Diários Oficiais** (com foco no **DOBA — Diário Oficial do Estado da Bahia** e **DOU — Diário Oficial da União**). 
 
-Seu objetivo principal é alertar candidatos de concursos públicos, seleções REDA, exames e convocações administrativas assim que seu nome ou variação nominal for citado em uma publicação oficial.
+O objetivo central é localizar **citações nominais e convocações de candidatos** em concursos públicos, exames, contratações REDA e atos administrativos no momento em que são publicados.
 
-### Principais Casos de Uso:
-1. **Monitoramento Automático Diário**: Execução programada do scraper no horário configurado pelo usuário com alertas instantâneos via Telegram e E-mail.
-2. **Pesquisa Manual Histórica**: Varredura sob demanda de edições específicas (por data exata ou período personalizado) com busca por nome cadastrado ou termo customizado.
-3. **Geração Inteligente de Variações Nominais**: Decomposição automática do nome completo do candidato em possíveis variações de citação em listas de homologação e convocações (ex: Nome Completo, Primeiro + Último Nome, Sobrenomes compostos).
-4. **Resiliência a Acentuação e Erros de Grafia**: Busca insensível a acentos agudos, circunflexos, til, cedilha e caixa alta/baixa.
+### Principais Funcionalidades:
+1. **Monitoramento Automático Diário**: Agendador que executa a varredura todos os dias às 06:00 e envia alertas instantâneos via Telegram.
+2. **Pesquisa Histórica por Intervalo de Datas**: Varredura em lote por períodos personalizados (7 dias, 30 dias ou até 365 dias consecutivos).
+3. **Resiliência a Acentuação e Quebras de Linha**: Motor de busca com normalização Unicode NFD e regex flexível a múltiplos espaços e quebras de linha (`\n`), garantindo a localização do candidato mesmo em tabelas e colunas formatadas.
+4. **Geração Automática de Variações Nominais**: Decomposição inteligente de nomes completos em possíveis combinações de citação (ex: Nome Completo, Primeiro + Último Nome, Sobrenomes compostos).
 
 ---
 
 ## 🏗️ 2. Arquitetura do Sistema
 
-O sistema é construído sobre uma arquitetura desacoplada **Client-Server**:
-
 ```
-[ Frontend: React 18 / Vite / TanStack Router / TailwindCSS ]
-                           │
-                    REST API (JSON)
-                           ▼
- [ Backend: FastAPI (Python 3.11+) / SQLAlchemy Async / Pydantic ]
-           │                       │                      │
-           ▼                       ▼                      ▼
-  [ Scraper Engine ]       [ Database Engine ]     [ Telegram Bot API ]
-  - DOBA HTML Scraper       - PostgreSQL / SQLite   - Webhook & Direct Alert
-  - DOU API Scraper         - AsyncSession          - Instant Notification
-  - Unicode SearchEngine
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      FRONTEND (React 19 / Vite)                         │
+│   - Router: TanStack Router (@tanstack/react-router)                    │
+│   - UI: TailwindCSS v4 / Radix UI / Lucide React                        │
+│   - API Client: Fetch centralizado com JWT em src/services/api.ts        │
+└────────────────────────────────────┬────────────────────────────────────┘
+                                     │
+                             HTTP/HTTPS REST API (JSON)
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    BACKEND (FastAPI / Python 3.13+)                     │
+│   - Framework: FastAPI 0.111+ com Uvicorn                               │
+│   - ORM: SQLAlchemy 2.0+ (AsyncIO + asyncpg / aiosqlite)                │
+│   - Engine de Scraping: httpx / BeautifulSoup4 / PyMuPDF                │
+│   - Scheduler: APScheduler 3.10+                                        │
+└──────────┬─────────────────────────┬─────────────────────────┬──────────┘
+           │                         │                         │
+           ▼                         ▼                         ▼
+┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+│  DOBA/DOU Scrapers   │  │   Banco de Dados     │  │   Telegram Bot API   │
+│ - HTML API do DOBA   │  │ - PostgreSQL Render  │  │ - Alertas Instantâneos│
+│ - DOU Portal API     │  │ - SQLAlchemy Async   │  │ - Notificação Match  │
+└──────────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
 
 ---
 
 ## 💾 3. Modelagem do Banco de Dados (ORM SQLAlchemy)
 
-Os modelos estão definidos em `backend/database.py` utilizando `declarative_base` com suporte assíncrono.
+O banco de dados é gerenciado pelo SQLAlchemy 2.0 com suporte a `asyncio`. Em produção (Render), conecta-se ao **PostgreSQL (`diario-inteligente-db`)** com o driver `asyncpg`.
 
 ```mermaid
 erDiagram
@@ -56,11 +68,12 @@ erDiagram
     User {
         string id PK
         string email UK
-        string password_hash
+        string hashed_password
         string full_name
         string cpf
         boolean onboarding_done
         string search_time
+        string telegram_bot_token
         string telegram_chat_id
         boolean telegram_notifications
     }
@@ -98,6 +111,8 @@ erDiagram
         datetime edition_date
         integer matches_found
         float duration_seconds
+        boolean success
+        string triggered_by
     }
 
     SearchMatch {
@@ -107,136 +122,116 @@ erDiagram
         string variation_found
         integer page_number
         string context_text
+        string keywords_nearby
         float relevance_score
     }
 ```
 
 ---
 
-## 🕷️ 4. Mecanismo de Web Scraping e Extração
+## 🕷️ 4. Mecanismo de Scraping & Resiliência de Rede
 
-O arquivo `backend/scraper.py` implementa a extração de conteúdo dos diários oficiais com alta performance e sem dependência de OCR para edições nativas.
+### 4.1. Scraping Nativo do DOBA (Diário Oficial da Bahia)
 
-### 4.1. DOBAScraper (Diário Oficial da Bahia)
-O portal do DOBA (`https://dool.egba.ba.gov.br`) utiliza uma estrutura de edições dividida em matérias individuais em HTML.
+A API do DOBA (`dool.egba.ba.gov.br`) é consultada via fluxo assíncrono otimizado:
+1. **Consulta da Edição**: `GET /apifront/portal/edicoes/edicoes_from_data/{YYYY-MM-DD}`
+2. **Índice da Edição**: `GET /html/{edicao_id}.html` (Extrai os IDs das matérias publicadas no dia).
+3. **Download Concorrente**: Baixa o conteúdo HTML de até 472+ matérias simultaneamente com `asyncio.Semaphore(25)` e pool de conexões HTTP `httpx.Limits(max_keepalive_connections=50, max_connections=100)`.
+4. **Resiliência a Desconexões (`_get_with_retry`)**: Qualquer instabilidade de rede ou timeout de socket é tratado com até 3 retentativas automáticas e backoff exponencial.
 
-1. **Obtenção do ID da Edição**:
-   - Requisição `GET https://dool.egba.ba.gov.br/apifront/portal/edicoes/edicoes_from_data/{YYYY-MM-DD}`.
-   - Retorna o JSON contendo o `id` da edição (ex: `21624` para a edição de 21/03/2026).
-2. **Mapeamento das Matérias**:
-   - Requisição `GET https://dool.egba.ba.gov.br/html/{edicao_id}.html`.
-   - Extrai todos os atributos `identificador` das tags `<a>` para obter a lista de matérias publicadas naquela edição.
-3. **Download Paralelo das Matérias**:
-   - Executa requisições concorrentes via `httpx.AsyncClient` em lotes de 30 para `GET https://dool.egba.ba.gov.br/apifront/portal/edicoes/publicacoes_ver_conteudo/{materia_id}`.
-4. **Sanitização de Texto**:
-   - Utiliza `BeautifulSoup(html, 'html.parser').get_text(separator=' ', strip=True)` para transformar o HTML em texto puro limpo.
-
-### 4.2. DOUScraper (Diário Oficial da União)
-1. **Consulta à API da Imprensa Nacional**:
-   - Conecta-se às APIs públicas e feeds de dados do Portal `IN.gov.br` para as Seções 1, 2 e 3.
-2. **Agrupamento**:
-   - Agrupa as matérias por Seção e Seletor de Concursos e Atos de Pessoal.
-
----
-
-## 🔍 5. Algoritmo de Busca e Normalização Unicode (`SearchEngine`)
-
-O motor de busca `SearchEngine` implementa normalização Unicode para evitar que variações de acentuação impeçam a localização de nomeações.
-
-### 5.1. Normalização Insensível a Acentos e Caixa
 ```python
-def strip_accents(s: str) -> str:
-    """Decompõe caracteres acentuados (NFD) e remove diacríticos (categoria Mn)."""
+async def _get_with_retry(self, client: httpx.AsyncClient, url: str, retries: int = 3) -> httpx.Response | None:
+    for attempt in range(retries):
+        try:
+            res = await client.get(url)
+            if res.status_code == 200:
+                return res
+        except Exception as ex:
+            if attempt == retries - 1:
+                logger.warning(f"DOBA: falha final ao acessar {url}: {ex}")
+            await asyncio.sleep(0.4 * (attempt + 1))
+    return None
+```
+
+---
+
+## 🔤 5. Motor de Busca Unicode & Regex Multilinha (`SearchEngine`)
+
+Muitas publicações oficiais sofrem quebra de coluna ou quebra de linha no HTML/PDF da imprensa oficial, dividindo o nome do candidato em duas linhas (ex: `GISÁH\n MICHELS CHEIN`).
+
+O `SearchEngine` resolve isso combinando:
+1. **Normalização Unicode NFD**: Remove acentos e converte para maiúsculas.
+2. **Regex de Espaços e Quebras de Linha (`\s+`)**: Substitui espaços simples no nome pesquisado pelo padrão `\s+` que casa com espaços, tabulações e quebras de linha (`\n`, `\r`).
+
+```python
+def _find_positions(self, text: str, term: str) -> list[int]:
+    import re
     import unicodedata
-    return "".join(
-        c for c in unicodedata.normalize("NFD", s) 
-        if unicodedata.category(c) != "Mn"
-    ).upper()
+
+    def strip_accents(s: str) -> str:
+        return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn").upper()
+
+    norm_text = strip_accents(text)
+    norm_term = strip_accents(term)
+
+    words = norm_term.split()
+    if not words:
+        return []
+
+    # Permite casar 'GISAH\n MICHELS CHEIN' quando o termo pesquisado e 'GISAH MICHELS CHEIN'
+    pattern_str = r"\s+".join(re.escape(w) for w in words)
+    pattern = re.compile(pattern_str)
+    return [m.start() for m in pattern.finditer(norm_text)]
 ```
-Exemplo de equivalência tratada:
-- `GISÁH MICHELS CHEIN` ➔ `GISAH MICHELS CHEIN`
-- `Convocação` ➔ `CONVOCACAO`
-
-### 5.2. Geração Automática de Variações de Nome (`_generate_name_variations`)
-Para o nome `GISÁH MICHELS CHEIN`:
-1. Nome Completo: `GISÁH MICHELS CHEIN`
-2. Primeiro + Último Nome: `GISÁH CHEIN`
-3. Sobrenomes compostos: `MICHELS CHEIN`
-4. Formatos sem acento: `GISAH MICHELS CHEIN`
-
-### 5.3. Cálculo de Relevância e Contexto
-- **Janela de Contexto**: Extrai 250 caracteres antes e 250 caracteres depois da ocorrência.
-- **Score de Relevância**:
-  - Score Base: `1.0`
-  - Bônus por Palavras-Chave de Convocação (`CONVOCAÇÃO`, `NOMEAÇÃO`, `REDA`, `EDITAL`, `POSSE`): `+3.0` por termo próximo.
 
 ---
 
-## 📡 6. Especificação das APIs REST (`backend/routes.py`)
+## 🗓️ 6. Busca por Intervalo de Datas
 
-| Método | Endpoint | Descrição | Parâmetros Relevantes |
+A rota `/api/v1/search/run` aceita `start_date` e `end_date`.
+
+Quando um intervalo é fornecido, a função `_execute_search_range` divide o período em lotes concorrentes de 5 dias e acumula todas as citações encontradas:
+
+```python
+async def _execute_search_range(user_id, journals, start_date, end_date, custom_term=None):
+    batch_size = 5
+    all_matches_accumulated = []
+    for i in range(0, len(date_list), batch_size):
+        batch_dates = date_list[i:i+batch_size]
+        tasks = [_execute_search(user_id, journals, d, custom_term=custom_term) for d in batch_dates]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for res in results:
+            if isinstance(res, dict) and res.get("total_matches", 0) > 0:
+                all_matches_accumulated.extend(res.get("matches", []))
+    return {
+        "message": f"Pesquisa concluída para o período {start_date} até {end_date}",
+        "total_matches": len(all_matches_accumulated),
+        "matches": all_matches_accumulated
+    }
+```
+
+---
+
+## 📡 7. Especificação das APIs REST
+
+| Método | Endpoint | Descrição | Autenticação |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/auth/register` | Registro de novo usuário | `email`, `password`, `full_name` |
-| `POST` | `/api/v1/auth/login` | Autenticação e geração de JWT | `email`, `password` |
-| `GET` | `/api/v1/users/me` | Retorna o perfil do usuário logado | Header `Authorization: Bearer <token>` |
-| `PATCH`| `/api/v1/users/me` | Atualiza perfil e regenera variações automáticas | `full_name`, `telegram_chat_id`, etc. |
-| `GET` | `/api/v1/users/me/variations` | Lista variações de nome ativas | — |
-| `POST` | `/api/v1/users/me/variations` | Adiciona variação manual | `variation` |
-| `POST` | `/api/v1/competitions` | Adiciona concurso para monitorar | `organ_name`, `position`, `year` |
-| `GET` | `/api/v1/competitions` | Lista concursos do usuário | — |
-| `POST` | `/api/v1/search/run` | Executa busca manual síncrona | `journals`, `target_date`, `custom_term` |
-| `GET` | `/api/v1/search/history` | Consulta histórico de pesquisas | `page`, `limit`, `only_matches` |
+| `POST` | `/api/v1/auth/register` | Registro de novo usuário | Pública |
+| `POST` | `/api/v1/auth/login` | Login e emissão de JWT Token | Pública |
+| `GET` | `/api/v1/users/me` | Retorna o perfil do usuário logado | Bearer JWT |
+| `PATCH` | `/api/v1/users/me` | Atualiza perfil e regenera variações | Bearer JWT |
+| `POST` | `/api/v1/search/run` | Executa busca no DOBA/DOU (data única ou período) | Bearer JWT |
+| `GET` | `/api/v1/search/history` | Retorna histórico de pesquisas executadas | Bearer JWT |
+| `POST` | `/api/v1/competitions` | Cadastra novo concurso monitorado | Bearer JWT |
 
 ---
 
-## 💻 7. Frontend e Experiência do Usuário (`frontend/`)
+## 🚀 8. Deploy & Infraestrutura em Produção
 
-O frontend é desenvolvido com **React 18 + Vite + TailwindCSS + TanStack Router + Shadcn UI**.
-
-### 7.1. Fluxo de Onboarding (3 Passos)
-1. **Passo 1 — Dados Pessoais**: Coleta Nome Completo e CPF.
-2. **Passo 2 — Concursos Alvo**: Seleção de concursos pré-cadastrados (ex: TJ-BA, SESAB, Polícia Civil) e campo para inclusão de concursos customizados.
-3. **Passo 3 — Variações de Nome**: Exibição das variações sugeridas pelo algoritmo com opção de ativação/desativação.
-
-### 7.2. Modal de Pesquisa Manual (`SearchDialog`)
-- **Filtro de Diários**: Seleção de DOBA e/ou DOU.
-- **Filtro de Período**: Hoje, 7 dias, 30 dias ou Data Personalizada (com DatePicker).
-- **Termo Customizado**: Permite pesquisar qualquer nome ou número de inscrição pontual sem alterar o cadastro.
-- **Feedback Visual**: Exibe o progresso em tempo real e apresenta o resultado com realce de trecho localizado.
+- **Servidor Backend**: Hosted on Render (`diario-oficial-inteligente.onrender.com`).
+- **Banco de Dados**: Render PostgreSQL (`diario-inteligente-db`).
+- **Protocolo de Banco**: Conversão automática de `postgres://` para `postgresql+asyncpg://` em `database.py`.
+- **Frontend**: Vite / React 19 compilado para Cloudflare / Vercel com conexão direta à API de Produção.
 
 ---
-
-## 🚀 8. Guias de Execução e Deploy
-
-### 8.1. Execução Local
-#### Backend (Python):
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-```
-
-#### Frontend (Node.js):
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### 8.2. Deploy em Produção
-- **Frontend**: Hospedado no **Vercel** / **Cloudflare Workers**.
-- **Backend**: Hospedado no **Render** / **VPS** com suporte a Worker assíncrono.
-- **Repositório Git**: Sincronizado automaticamente com o branch `main`.
-
----
-
-## ✅ 9. Resumo para Auditoria
-
-1. **Scraper Nativo HTML DOBA**: Conexão direta com a API do portal `dool.egba.ba.gov.br`, sem falhas de OCR ou cookies de sessão.
-2. **Tratamento Accents-Insensitive**: Algoritmo `unicodedata` NFD testado com 100% de sucesso na edição nº 24.360 do DOBA (21/03/2026).
-3. **Segurança e LGPD**: Senhas criptografadas com `bcrypt`, tokens JWT expiram e consultas são isoladas por `user_id`.
-
----
-*Documentação gerada automaticamente para validação do sistema.*
+*Documentação mantida e atualizada pelo Antigravity AI Assistant.*
