@@ -101,23 +101,37 @@ function OnboardingPage() {
 
   async function finish() {
     if (submitting) return;
-    if (!email || !password || password.length < 6) {
-      toast.error("Informe e-mail e senha (mín. 6 caracteres).");
-      setStep(1);
-      return;
-    }
     setSubmitting(true);
     try {
-      await auth.register(email, password, name);
-      // Add custom variations (beyond auto-generated defaults)
+      if (!auth.isAuthenticated()) {
+        if (!email || !password || password.length < 6) {
+          toast.error("Informe e-mail e senha (mín. 6 caracteres).");
+          setStep(1);
+          setSubmitting(false);
+          return;
+        }
+        try {
+          await auth.register(email, password, name);
+        } catch (regErr: any) {
+          // Se o e-mail já existe, faz o login automático
+          if (regErr?.message?.toLowerCase().includes("cadastrado") || regErr?.message?.includes("400")) {
+            await auth.login(email, password);
+          } else {
+            throw regErr;
+          }
+        }
+      }
+
+      // Adiciona variações de nome
       for (const v of variations) {
         try {
           await userApi.addVariation(v);
         } catch {
-          /* ignore duplicates */
+          /* ignora duplicatas */
         }
       }
-      // Add selected competitions
+
+      // Adiciona concursos selecionados
       for (const concursoStr of selectedConcursos) {
         try {
           const parts = concursoStr.split(" — ");
@@ -131,9 +145,10 @@ function OnboardingPage() {
             is_active: true,
           });
         } catch {
-          /* non-blocking */
+          /* não impeditivo */
         }
       }
+
       if (tgToken && tgChat) {
         try {
           await userApi.updateProfile({
@@ -142,18 +157,20 @@ function OnboardingPage() {
             telegram_notifications: true,
           });
         } catch {
-          /* non-blocking */
+          /* não impeditivo */
         }
       }
+
       try {
         await userApi.completeOnboarding();
       } catch {
-        /* non-blocking */
+        /* não impeditivo */
       }
-      toast.success("Conta criada com sucesso!");
+
+      toast.success("Configuração concluída com sucesso!");
       navigate({ to: "/" });
     } catch (err: any) {
-      toast.error(err?.message || "Falha ao criar conta");
+      toast.error(err?.message || "Falha ao concluir onboarding");
     } finally {
       setSubmitting(false);
     }
