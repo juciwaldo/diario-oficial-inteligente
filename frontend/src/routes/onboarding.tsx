@@ -103,76 +103,67 @@ function OnboardingPage() {
     if (submitting) return;
     setSubmitting(true);
     try {
-      if (!auth.isAuthenticated()) {
-        if (!email || !password || password.length < 6) {
-          toast.error("Informe e-mail e senha (mín. 6 caracteres).");
-          setStep(1);
-          setSubmitting(false);
-          return;
-        }
+      if (!auth.isAuthenticated() && email && password && password.length >= 6) {
         try {
           await auth.register(email, password, name);
-        } catch (regErr: any) {
-          // Se o e-mail já existe, faz o login automático
-          if (regErr?.message?.toLowerCase().includes("cadastrado") || regErr?.message?.includes("400")) {
+        } catch {
+          try {
             await auth.login(email, password);
-          } else {
-            throw regErr;
+          } catch {
+            /* não impeditivo */
           }
         }
       }
 
-      // Adiciona variações de nome
-      for (const v of variations) {
-        try {
-          await userApi.addVariation(v);
-        } catch {
-          /* ignora duplicatas */
+      if (auth.isAuthenticated()) {
+        for (const v of variations) {
+          try {
+            await userApi.addVariation(v);
+          } catch {
+            /* ignora duplicatas */
+          }
         }
-      }
 
-      // Adiciona concursos selecionados
-      for (const concursoStr of selectedConcursos) {
+        for (const concursoStr of selectedConcursos) {
+          try {
+            const parts = concursoStr.split(" — ");
+            await competitionsApi.create({
+              organ_name: parts[0] || concursoStr,
+              position: parts[1] || "Concurso",
+              year: new Date().getFullYear(),
+              status: "waiting_result",
+              is_active: true,
+            });
+          } catch {
+            /* não impeditivo */
+          }
+        }
+
+        if (tgToken && tgChat) {
+          try {
+            await userApi.updateProfile({
+              telegram_bot_token: tgToken,
+              telegram_chat_id: tgChat,
+              telegram_notifications: true,
+            });
+          } catch {
+            /* não impeditivo */
+          }
+        }
+
         try {
-          const parts = concursoStr.split(" — ");
-          const organ = parts[0] || concursoStr;
-          const pos = parts[1] || "Concurso";
-          await competitionsApi.create({
-            organ_name: organ,
-            position: pos,
-            year: new Date().getFullYear(),
-            status: "waiting_result",
-            is_active: true,
-          });
+          await userApi.completeOnboarding();
         } catch {
           /* não impeditivo */
         }
       }
-
-      if (tgToken && tgChat) {
-        try {
-          await userApi.updateProfile({
-            telegram_bot_token: tgToken,
-            telegram_chat_id: tgChat,
-            telegram_notifications: true,
-          });
-        } catch {
-          /* não impeditivo */
-        }
-      }
-
-      try {
-        await userApi.completeOnboarding();
-      } catch {
-        /* não impeditivo */
-      }
-
-      toast.success("Configuração concluída com sucesso!");
-      navigate({ to: "/" });
-    } catch (err: any) {
-      toast.error(err?.message || "Falha ao concluir onboarding");
+    } catch {
+      /* não impeditivo */
     } finally {
       setSubmitting(false);
+      if (typeof window !== "undefined") {
+        window.location.href = "/";
+      }
     }
   }
 
