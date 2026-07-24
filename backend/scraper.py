@@ -225,9 +225,22 @@ class DOBAScraper:
     BASE_URL = "https://dool.egba.ba.gov.br"
 
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (compatible; DiarioInteligente/1.0)",
-        "Accept": "application/json, text/html, */*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
+
+    async def _get_with_retry(self, client: httpx.AsyncClient, url: str, retries: int = 3) -> httpx.Response | None:
+        """Faz requisição HTTP com até 'retries' tentativas em caso de instabilidade de rede."""
+        for attempt in range(retries):
+            try:
+                res = await client.get(url)
+                if res.status_code == 200:
+                    return res
+            except Exception as ex:
+                if attempt == retries - 1:
+                    logger.warning(f"DOBA: falha final ao acessar {url}: {ex}")
+                await asyncio.sleep(0.4 * (attempt + 1))
+        return None
 
     async def fetch(self, target_date: date = None) -> DiarioContent | None:
         """Busca a edição do DOBA na data especificada e extrai todas as matérias em HTML."""
@@ -239,11 +252,11 @@ class DOBAScraper:
 
         try:
             limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
-            async with httpx.AsyncClient(verify=False, timeout=45.0, headers=self.HEADERS, limits=limits) as client:
+            async with httpx.AsyncClient(verify=False, timeout=30.0, headers=self.HEADERS, limits=limits) as client:
                 api_url = f"{self.BASE_URL}/apifront/portal/edicoes/edicoes_from_data/{date_str}"
-                res = await client.get(api_url)
-                if res.status_code != 200:
-                    logger.warning(f"DOBA: HTTP {res.status_code} na API edicoes")
+                res = await self._get_with_retry(client, api_url)
+                if not res or res.status_code != 200:
+                    logger.warning(f"DOBA: falha ao consultar API edicoes para {date_str}")
                     return None
 
                 data = res.json()
@@ -256,8 +269,8 @@ class DOBAScraper:
 
                 # Busca arquivo HTML com a lista de materias
                 html_url = f"{self.BASE_URL}/html/{edicao_id}.html"
-                res_html = await client.get(html_url)
-                if res_html.status_code != 200:
+                res_html = await self._get_with_retry(client, html_url)
+                if not res_html or res_html.status_code != 200:
                     logger.warning(f"DOBA: falha ao baixar {html_url}")
                     return None
 
@@ -274,12 +287,9 @@ class DOBAScraper:
 
                 async def fetch_materia(m_id):
                     async with sem:
-                        try:
-                            r = await client.get(f"{self.BASE_URL}/apifront/portal/edicoes/publicacoes_ver_conteudo/{m_id}")
-                            if r.status_code == 200:
-                                return m_id, r.text
-                        except Exception as ex:
-                            logger.warning(f"DOBA: erro ao baixar materia {m_id}: {ex}")
+                        r = await self._get_with_retry(client, f"{self.BASE_URL}/apifront/portal/edicoes/publicacoes_ver_conteudo/{m_id}")
+                        if r and r.status_code == 200:
+                            return m_id, r.text
                         return m_id, None
 
                 tasks = [fetch_materia(m_id) for m_id in materias]
